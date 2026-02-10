@@ -1,38 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
+import { useApiData } from './hooks/useApiData';
+import { fetchCaseStudies, fetchServices, fetchTestimonials, submitContactLead } from './services/backendApi';
 
 /**
- * Simple, dependency-free content placeholders.
- * In a following step these will be replaced with API-fetched content (e.g. /api/content).
+ * Keep static technologies local (not part of backend content in this iteration).
  */
-const SERVICES = [
-  {
-    title: 'Embedded Software Development',
-    description:
-      'Production-grade firmware and middleware for connected devices—built for performance, reliability, and maintainability.',
-  },
-  {
-    title: 'BSP Development',
-    description:
-      'Board bring-up, bootloader, kernel, device tree, drivers, and build systems tailored to your silicon and product needs.',
-  },
-  {
-    title: 'Networking Development',
-    description:
-      'Feature development and optimization across routing, switching, and network services for embedded and edge platforms.',
-  },
-  {
-    title: 'L2/L3 Protocol Development & QA Engineering',
-    description:
-      'Implementation plus validation for key protocols with automated test strategy, tooling, and continuous quality practices.',
-  },
-  {
-    title: 'Gateway Development (RDK-B, OpenWRT, prplOS)',
-    description:
-      'Carrier-grade gateway solutions: customization, integration, performance tuning, and lifecycle support.',
-  },
-];
-
 const TECHNOLOGIES = [
   'C / C++',
   'Linux',
@@ -50,47 +23,61 @@ const TECHNOLOGIES = [
   'QA Automation',
 ];
 
-const TESTIMONIALS = [
-  {
-    quote:
-      'Their team integrated seamlessly with ours and delivered a stable BSP on a tight schedule—excellent communication throughout.',
-    name: 'Engineering Manager',
-    company: 'Connectivity OEM',
-  },
-  {
-    quote:
-      'We saw measurable performance gains in gateway throughput and reduced field issues after the protocol QA improvements.',
-    name: 'Director of Software',
-    company: 'Broadband Provider',
-  },
-  {
-    quote:
-      'Strong embedded Linux expertise. The bring-up work was methodical and well-documented, accelerating our product launch.',
-    name: 'Product Lead',
-    company: 'IoT Platform Company',
-  },
-];
+const mapServicesToCards = (services) => {
+  if (!Array.isArray(services)) return [];
+  return services
+    .filter((s) => s && s.is_active)
+    .map((s) => ({
+      id: s.id,
+      slug: s.slug,
+      title: s.title,
+      description: s.short_desc,
+    }));
+};
 
-const CASE_STUDIES = [
-  {
-    title: 'High-Performance Home Gateway Modernization',
-    highlights: [
-      'Migrated and optimized RDK‑B gateway stack',
-      'Improved throughput and reduced latency under load',
-      'Introduced automated regression test pipelines',
-    ],
-    tags: ['RDK‑B', 'Networking', 'QA Automation'],
-  },
-  {
-    title: 'Custom BSP for New Hardware Platform',
-    highlights: [
-      'Board bring-up with bootloader + kernel enablement',
-      'Device tree and driver integration',
-      'Reproducible builds and release artifacts',
-    ],
-    tags: ['BSP', 'Linux', 'Yocto'],
-  },
-];
+const mapTestimonials = (testimonials) => {
+  if (!Array.isArray(testimonials)) return [];
+  return testimonials.map((t) => ({
+    id: t.id,
+    quote: t.quote,
+    name: t.client_name,
+    company: t.company || t.client_title || '',
+  }));
+};
+
+const mapCaseStudies = (caseStudies) => {
+  if (!Array.isArray(caseStudies)) return [];
+  return caseStudies
+    .filter((cs) => cs && cs.is_published)
+    .map((cs) => {
+      // Convert long-form content into bullets/tags that match existing UI.
+      const highlights = [];
+      if (cs.challenge) highlights.push(`Challenge: ${cs.challenge}`);
+      if (cs.solution) highlights.push(`Solution: ${cs.solution}`);
+      if (cs.results) highlights.push(`Results: ${cs.results}`);
+
+      // Keep cards compact: if backend has very long text, trim each highlight.
+      const trimmedHighlights = highlights
+        .slice(0, 3)
+        .map((h) => (h.length > 160 ? `${h.slice(0, 157)}…` : h));
+
+      const tags = [];
+      if (cs.industry) tags.push(cs.industry);
+      if (cs.stack) tags.push(cs.stack);
+
+      return {
+        id: cs.id,
+        title: cs.title,
+        highlights: trimmedHighlights.length ? trimmedHighlights : [cs.summary],
+        tags: tags.length ? tags : ['Case study'],
+      };
+    });
+};
+
+const errorToMessage = (err) => {
+  if (!err) return '';
+  return err.message || 'Something went wrong. Please try again.';
+};
 
 // PUBLIC_INTERFACE
 function App() {
@@ -111,16 +98,49 @@ function App() {
 
   const year = useMemo(() => new Date().getFullYear(), []);
 
+  const {
+    data: servicesData,
+    loading: servicesLoading,
+    error: servicesError,
+    refresh: refreshServices,
+  } = useApiData(fetchServices);
+
+  const {
+    data: testimonialsData,
+    loading: testimonialsLoading,
+    error: testimonialsError,
+    refresh: refreshTestimonials,
+  } = useApiData(fetchTestimonials);
+
+  const {
+    data: caseStudiesData,
+    loading: caseStudiesLoading,
+    error: caseStudiesError,
+    refresh: refreshCaseStudies,
+  } = useApiData(fetchCaseStudies);
+
+  const services = useMemo(() => mapServicesToCards(servicesData), [servicesData]);
+  const testimonials = useMemo(() => mapTestimonials(testimonialsData), [testimonialsData]);
+  const caseStudies = useMemo(() => mapCaseStudies(caseStudiesData), [caseStudiesData]);
+
   const [testimonialIndex, setTestimonialIndex] = useState(0);
 
-  const activeTestimonial = TESTIMONIALS[testimonialIndex];
+  // Keep index in bounds as testimonials load/change
+  useEffect(() => {
+    if (!testimonials.length) return;
+    setTestimonialIndex((idx) => Math.min(idx, testimonials.length - 1));
+  }, [testimonials.length]);
+
+  const activeTestimonial = testimonials.length ? testimonials[testimonialIndex] : null;
 
   const goPrev = () => {
-    setTestimonialIndex((idx) => (idx - 1 + TESTIMONIALS.length) % TESTIMONIALS.length);
+    if (!testimonials.length) return;
+    setTestimonialIndex((idx) => (idx - 1 + testimonials.length) % testimonials.length);
   };
 
   const goNext = () => {
-    setTestimonialIndex((idx) => (idx + 1) % TESTIMONIALS.length);
+    if (!testimonials.length) return;
+    setTestimonialIndex((idx) => (idx + 1) % testimonials.length);
   };
 
   const [contactForm, setContactForm] = useState({
@@ -132,16 +152,17 @@ function App() {
   });
 
   const [contactStatus, setContactStatus] = useState({ type: 'idle', message: '' });
+  const [contactSubmitting, setContactSubmitting] = useState(false);
 
   const onContactChange = (e) => {
     const { name, value } = e.target;
     setContactForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const onContactSubmit = (e) => {
+  const onContactSubmit = async (e) => {
     e.preventDefault();
 
-    // Basic client-side validation; API wiring will come later.
+    // Basic client-side validation + honeypot behavior.
     if (contactForm.website) {
       // Honeypot triggered - silently "succeed"
       setContactStatus({ type: 'success', message: 'Thanks — we will be in touch shortly.' });
@@ -153,10 +174,40 @@ function App() {
       return;
     }
 
-    setContactStatus({
-      type: 'success',
-      message: 'Message prepared locally. API wiring will be added in the next step.',
-    });
+    setContactSubmitting(true);
+    setContactStatus({ type: 'idle', message: '' });
+
+    try {
+      await submitContactLead({
+        name: contactForm.name,
+        email: contactForm.email,
+        company: contactForm.company,
+        message: contactForm.message,
+        honeypot: contactForm.website,
+        source: 'website',
+      });
+
+      setContactStatus({
+        type: 'success',
+        message: 'Thanks! Your message was sent. We will respond with next steps shortly.',
+      });
+
+      // Reset form on success (keep honeypot empty)
+      setContactForm({
+        name: '',
+        email: '',
+        company: '',
+        message: '',
+        website: '',
+      });
+    } catch (err) {
+      setContactStatus({
+        type: 'error',
+        message: errorToMessage(err),
+      });
+    } finally {
+      setContactSubmitting(false);
+    }
   };
 
   return (
@@ -207,8 +258,8 @@ function App() {
                 Embedded & networking expertise to ship reliable products faster.
               </h1>
               <p className="hero-subtext">
-                From BSP bring-up to L2/L3 protocol development and carrier-grade gateways, we help teams
-                build high-performance systems with confidence.
+                From BSP bring-up to L2/L3 protocol development and carrier-grade gateways, we help teams build
+                high-performance systems with confidence.
               </p>
 
               <div className="hero-actions">
@@ -246,8 +297,7 @@ function App() {
                   <li>Reproducible builds and release engineering</li>
                 </ul>
                 <div className="panel-note">
-                  <strong>Next:</strong> connect this page to backend content endpoints to dynamically load services,
-                  testimonials, and case studies.
+                  <strong>Live:</strong> services, testimonials, and case studies are now loaded from the backend API.
                 </div>
               </div>
             </div>
@@ -266,19 +316,32 @@ function App() {
               </p>
             </div>
 
-            <div className="cards-grid" role="list">
-              {SERVICES.map((service) => (
-                <article className="card" role="listitem" key={service.title}>
-                  <h3 className="card-title">{service.title}</h3>
-                  <p className="card-description">{service.description}</p>
-                  <div className="card-footer">
-                    <a className="text-link" href="#contact" aria-label={`Contact us about ${service.title}`}>
-                      Discuss this service
-                    </a>
-                  </div>
-                </article>
-              ))}
-            </div>
+            {servicesLoading ? <p className="section-subtitle">Loading services…</p> : null}
+
+            {servicesError ? (
+              <p className="section-subtitle">
+                Could not load services. {errorToMessage(servicesError)}{' '}
+                <button type="button" className="text-link" onClick={refreshServices}>
+                  Retry
+                </button>
+              </p>
+            ) : null}
+
+            {!servicesLoading && !servicesError ? (
+              <div className="cards-grid" role="list">
+                {services.map((service) => (
+                  <article className="card" role="listitem" key={service.slug || service.title}>
+                    <h3 className="card-title">{service.title}</h3>
+                    <p className="card-description">{service.description}</p>
+                    <div className="card-footer">
+                      <a className="text-link" href="#contact" aria-label={`Contact us about ${service.title}`}>
+                        Discuss this service
+                      </a>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -323,41 +386,54 @@ function App() {
               <h2 id="testimonials-title" className="section-title">
                 Testimonials
               </h2>
+              <p className="section-subtitle">What teams say after shipping together.</p>
+            </div>
+
+            {testimonialsLoading ? <p className="section-subtitle">Loading testimonials…</p> : null}
+
+            {testimonialsError ? (
               <p className="section-subtitle">
-                A lightweight carousel for now—later this will be driven by backend content.
+                Could not load testimonials. {errorToMessage(testimonialsError)}{' '}
+                <button type="button" className="text-link" onClick={refreshTestimonials}>
+                  Retry
+                </button>
               </p>
-            </div>
+            ) : null}
 
-            <div className="testimonial">
-              <button className="icon-btn" type="button" onClick={goPrev} aria-label="Previous testimonial">
-                ‹
-              </button>
+            {!testimonialsLoading && !testimonialsError && activeTestimonial ? (
+              <div className="testimonial">
+                <button className="icon-btn" type="button" onClick={goPrev} aria-label="Previous testimonial">
+                  ‹
+                </button>
 
-              <figure className="testimonial-card">
-                <blockquote className="testimonial-quote">“{activeTestimonial.quote}”</blockquote>
-                <figcaption className="testimonial-meta">
-                  <span className="testimonial-name">{activeTestimonial.name}</span>
-                  <span className="testimonial-company">{activeTestimonial.company}</span>
-                </figcaption>
+                <figure className="testimonial-card">
+                  <blockquote className="testimonial-quote">“{activeTestimonial.quote}”</blockquote>
+                  <figcaption className="testimonial-meta">
+                    <span className="testimonial-name">{activeTestimonial.name}</span>
+                    {activeTestimonial.company ? (
+                      <span className="testimonial-company">{activeTestimonial.company}</span>
+                    ) : null}
+                  </figcaption>
 
-                <div className="dots" role="tablist" aria-label="Select testimonial">
-                  {TESTIMONIALS.map((_, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      className={`dot ${idx === testimonialIndex ? 'dot-active' : ''}`}
-                      onClick={() => setTestimonialIndex(idx)}
-                      aria-label={`Testimonial ${idx + 1}`}
-                      aria-pressed={idx === testimonialIndex}
-                    />
-                  ))}
-                </div>
-              </figure>
+                  <div className="dots" role="tablist" aria-label="Select testimonial">
+                    {testimonials.map((_, idx) => (
+                      <button
+                        key={testimonials[idx].id || idx}
+                        type="button"
+                        className={`dot ${idx === testimonialIndex ? 'dot-active' : ''}`}
+                        onClick={() => setTestimonialIndex(idx)}
+                        aria-label={`Testimonial ${idx + 1}`}
+                        aria-pressed={idx === testimonialIndex}
+                      />
+                    ))}
+                  </div>
+                </figure>
 
-              <button className="icon-btn" type="button" onClick={goNext} aria-label="Next testimonial">
-                ›
-              </button>
-            </div>
+                <button className="icon-btn" type="button" onClick={goNext} aria-label="Next testimonial">
+                  ›
+                </button>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -373,25 +449,38 @@ function App() {
               </p>
             </div>
 
-            <div className="cases-grid" role="list">
-              {CASE_STUDIES.map((cs) => (
-                <article className="case-card" role="listitem" key={cs.title}>
-                  <h3 className="card-title">{cs.title}</h3>
-                  <ul className="bullets">
-                    {cs.highlights.map((h) => (
-                      <li key={h}>{h}</li>
-                    ))}
-                  </ul>
-                  <div className="case-tags" aria-label="Project tags">
-                    {cs.tags.map((t) => (
-                      <span className="tag tag-soft" key={t}>
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
+            {caseStudiesLoading ? <p className="section-subtitle">Loading case studies…</p> : null}
+
+            {caseStudiesError ? (
+              <p className="section-subtitle">
+                Could not load case studies. {errorToMessage(caseStudiesError)}{' '}
+                <button type="button" className="text-link" onClick={refreshCaseStudies}>
+                  Retry
+                </button>
+              </p>
+            ) : null}
+
+            {!caseStudiesLoading && !caseStudiesError ? (
+              <div className="cases-grid" role="list">
+                {caseStudies.map((cs) => (
+                  <article className="case-card" role="listitem" key={cs.id || cs.title}>
+                    <h3 className="card-title">{cs.title}</h3>
+                    <ul className="bullets">
+                      {cs.highlights.map((h) => (
+                        <li key={h}>{h}</li>
+                      ))}
+                    </ul>
+                    <div className="case-tags" aria-label="Project tags">
+                      {cs.tags.map((t) => (
+                        <span className="tag tag-soft" key={t}>
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -428,6 +517,7 @@ function App() {
                     onChange={onContactChange}
                     autoComplete="name"
                     required
+                    disabled={contactSubmitting}
                   />
                 </label>
 
@@ -440,6 +530,7 @@ function App() {
                     onChange={onContactChange}
                     autoComplete="email"
                     required
+                    disabled={contactSubmitting}
                   />
                 </label>
               </div>
@@ -451,6 +542,7 @@ function App() {
                   value={contactForm.company}
                   onChange={onContactChange}
                   autoComplete="organization"
+                  disabled={contactSubmitting}
                 />
               </label>
 
@@ -462,6 +554,7 @@ function App() {
                   onChange={onContactChange}
                   rows={5}
                   required
+                  disabled={contactSubmitting}
                 />
               </label>
 
@@ -469,19 +562,23 @@ function App() {
               <div className="honeypot" aria-hidden="true">
                 <label className="field">
                   <span className="label">Website</span>
-                  <input name="website" value={contactForm.website} onChange={onContactChange} tabIndex={-1} />
+                  <input
+                    name="website"
+                    value={contactForm.website}
+                    onChange={onContactChange}
+                    tabIndex={-1}
+                    disabled={contactSubmitting}
+                  />
                 </label>
               </div>
 
-              <button type="submit" className="btn btn-primary btn-full">
-                Send message
+              <button type="submit" className="btn btn-primary btn-full" disabled={contactSubmitting}>
+                {contactSubmitting ? 'Sending…' : 'Send message'}
               </button>
 
               {contactStatus.type !== 'idle' ? (
                 <p
-                  className={`form-status ${
-                    contactStatus.type === 'success' ? 'status-success' : 'status-error'
-                  }`}
+                  className={`form-status ${contactStatus.type === 'success' ? 'status-success' : 'status-error'}`}
                   role="status"
                 >
                   {contactStatus.message}
@@ -489,7 +586,7 @@ function App() {
               ) : null}
 
               <p className="form-help">
-                We will connect this form to <code>POST /api/contact</code> in a follow-up step.
+                This form sends a request to <code>POST /api/contact</code>.
               </p>
             </form>
           </div>
